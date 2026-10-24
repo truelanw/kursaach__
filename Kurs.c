@@ -20,12 +20,14 @@ int exit_x, exit_y;
 int** path;
 int show_path = 0;
 int has_won = 0;
+// Одинаковые размеры -> одинаковый лабиринт)
+unsigned int maze_seed = 0;
 GLFWwindow* window;
 
 int dx[] = { 0, 1, 0, -1 };
 int dy[] = { -1, 0, 1, 0 };
 
-// подсчитывает непосещённых соседей
+// Проверяет количество непосещённых соседей у клетки (для генерации)
 int check_neighbors(int x, int y) {
     int count = 0;
     for (int i = 0; i < 4; i++) {
@@ -40,7 +42,7 @@ int check_neighbors(int x, int y) {
     return count;
 }
 
-// рекурсивная генерация лабиринта
+// Рекурсивная генерация лабиринта методом бэктрекинга (Randomized DFS)
 void generate_maze_recursive(int x, int y) {
     maze[y][x] = 1;
 
@@ -66,7 +68,7 @@ void generate_maze_recursive(int x, int y) {
     }
 }
 
-// создаёт новый лабиринт, задаёт вход и выход
+// Создаёт новый лабиринт, задаёт вход и выход
 void generate_maze() {
     maze = (int**)malloc(maze_height * sizeof(int*));
     for (int i = 0; i < maze_height; i++) {
@@ -76,7 +78,7 @@ void generate_maze() {
         }
     }
 
-    srand(time(NULL));
+    srand(maze_seed);
     int start_x = 1;
     int start_y = 1;
     if (maze_width > 2 && maze_height > 2) {
@@ -95,7 +97,7 @@ void generate_maze() {
     has_won = 0;
 }
 
-// поиск кратчайшего пути алгоритмом BFS
+// Находит кратчайший путь от игрока до выхода алгоритмом BFS
 void find_shortest_path() {
     if (path != NULL) {
         for (int i = 0; i < maze_height; i++) {
@@ -178,13 +180,14 @@ void find_shortest_path() {
     free(dist);
 }
 
-// рисует поздравление при победе
+// Рисует сообщение о победе
 void draw_win_message() {
     int window_width, window_height;
     glfwGetWindowSize(window, &window_width, &window_height);
 
+    // Полупрозрачный чёрный фон
     float panel_w = 380.0f;
-    float panel_h = 80.0f;
+    float panel_h = 100.0f;
     float panel_x = (window_width - panel_w) / 2.0f;
     float panel_y = (window_height - panel_h) / 2.0f;
 
@@ -199,10 +202,11 @@ void draw_win_message() {
     glEnd();
     glDisable(GL_BLEND);
 
+    // Текст "CONGRATULATIONS!"
     glColor3f(1.0f, 0.84f, 0.0f);
     glLineWidth(2.5f);
-    float x = panel_x + 30;
-    float y = panel_y + 50;
+    float x = panel_x + 30;  // теперь отталкиваемся от панели, чтобы текст был внутри
+    float y = panel_y + 45;  // немного подняли, чтобы уместиться в 100 пикселей высоты
 
     // C
     glBegin(GL_LINE_STRIP);
@@ -329,7 +333,7 @@ void draw_win_message() {
     glEnd();
 }
 
-// отрисовывает лабиринт, игрока, выход и путь
+// Отрисовывает лабиринт, игрока, выход и путь (если включён)
 void display() {
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -390,7 +394,7 @@ void display() {
     glfwSwapBuffers(window);
 }
 
-// обрабатывает нажатия клавиш
+// Обрабатывает нажатия клавиш
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (action == GLFW_PRESS) {
         if (key == GLFW_KEY_N) {
@@ -455,7 +459,7 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     }
 }
 
-// настраивает проекцию при изменении размера окна
+// Настраивает область просмотра и проекцию при изменении размера окна
 void resizeCallback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
     glMatrixMode(GL_PROJECTION);
@@ -473,6 +477,10 @@ int main(int argc, char** argv) {
     if (maze_height < 5) maze_height = 5;
     if (maze_width % 2 == 0) maze_width++;
     if (maze_height % 2 == 0) maze_height++;
+
+    // зависит только от размеров лабиринта
+    maze_seed = (unsigned int)maze_width * 10007u + (unsigned int)maze_height;
+    printf("Maze %dx%d, seed %u\n", maze_width, maze_height, maze_seed);
 
     if (!glfwInit()) {
         fprintf(stderr, "Failed to initialize GLFW\n");
