@@ -20,7 +20,7 @@ int exit_x, exit_y;
 int** path;
 int show_path = 0;
 int has_won = 0;
-// Зерно генератора (одинаковые размеры -> одинаковый лабиринт)
+// Зерно генератора текущего лабиринта (выводится в консоль)
 unsigned int maze_seed = 0;
 GLFWwindow* window;
 
@@ -89,7 +89,10 @@ void generate_maze() {
         }
     }
 
+    // Случайное зерно: время + счётчик тактов
+    maze_seed = (unsigned int)time(NULL) ^ ((unsigned int)clock() * 2654435761u) ^ (maze_seed * 31u + 1u);
     srand(maze_seed);
+    printf("Maze %dx%d, seed %u\n", maze_width, maze_height, maze_seed);
     int start_x = 1;
     int start_y = 1;
     if (maze_width > 2 && maze_height > 2) {
@@ -229,7 +232,7 @@ void draw_win_message() {
 
     // Полупрозрачный чёрный фон
     float panel_w = 380.0f;
-    float panel_h = 80.0f;
+    float panel_h = 100.0f;
     float panel_x = (window_width - panel_w) / 2.0f;
     float panel_y = (window_height - panel_h) / 2.0f;
 
@@ -247,8 +250,8 @@ void draw_win_message() {
     // Текст "CONGRATULATIONS!"
     glColor3f(1.0f, 0.84f, 0.0f);
     glLineWidth(2.5f);
-    float x = panel_x + 30;
-    float y = panel_y + 50;
+    float x = panel_x + 30;  // теперь отталкиваемся от панели, чтобы текст был внутри
+    float y = panel_y + 45;  // немного подняли, чтобы уместиться в 100 пикселей высоты
 
     // C
     glBegin(GL_LINE_STRIP);
@@ -534,10 +537,6 @@ int main(int argc, char** argv) {
     if (maze_height < 5) maze_height = 5;
     if (maze_width % 2 == 0) maze_width++;
     if (maze_height % 2 == 0) maze_height++;
-
-    // Зерно зависит только от размеров лабиринта
-    maze_seed = (unsigned int)maze_width * 10007u + (unsigned int)maze_height;
-    printf("Maze %dx%d, seed %u\n", maze_width, maze_height, maze_seed);
 
     if (!glfwInit()) {
         fprintf(stderr, "Failed to initialize GLFW\n");
