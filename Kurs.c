@@ -128,9 +128,14 @@ void find_shortest_path_astar() {
         path[i] = (int*)calloc(maze_width, sizeof(int));
     }
 
-    int queue_x[10000];
-    int queue_y[10000];
-    int front = 0, rear = 0;
+    int n = maze_width * maze_height;
+    int* g = (int*)malloc(n * sizeof(int));                 // лучшая известная длина пути до клетки
+    int* parent = (int*)malloc(n * sizeof(int));            // откуда пришли в клетку
+    unsigned char* closed = (unsigned char*)calloc(n, 1);   // клетка уже раскрыта
+    // Корзины клеток с f == F и f == F + 2
+    int* bucket_cur = (int*)malloc((4 * n + 1) * sizeof(int));  // клетки с f == F
+    int* bucket_next = (int*)malloc((4 * n + 1) * sizeof(int)); // клетки с f == F + 2
+    int cur_size = 0, next_size = 0;
 
     for (int i = 0; i < n; i++) g[i] = -1;
 
@@ -161,62 +166,70 @@ void find_shortest_path_astar() {
         closed[idx] = 1;
         last_visited++;
 
-    while (front < rear) {
-        int x = queue_x[front];
-        int y = queue_y[front];
-        front++;
+        if (idx == goal) break;    // выход найден - дальше не ищем
+
+        int x = idx % maze_width;
+        int y = idx / maze_width;
 
         for (int i = 0; i < 4; i++) {
             int nx = x + dx[i];
             int ny = y + dy[i];
 
             if (nx >= 0 && nx < maze_width && ny >= 0 && ny < maze_height) {
-                if (maze[ny][nx] == 1 && dist[ny][nx] == -1) {
-                    dist[ny][nx] = dist[y][x] + 1;
-                    queue_x[rear] = nx;
-                    queue_y[rear] = ny;
-                    rear++;
-                }
-            }
-        }
-    }
-
-    if (dist[exit_y][exit_x] != -1) {
-        int x = exit_x;
-        int y = exit_y;
-
-        while (x != player_x || y != player_y) {
-            path[y][x] = 1;
-
-            for (int i = 0; i < 4; i++) {
-                int nx = x + dx[i];
-                int ny = y + dy[i];
-
-                if (nx >= 0 && nx < maze_width && ny >= 0 && ny < maze_height) {
-                    if (dist[ny][nx] == dist[y][x] - 1) {
-                        x = nx;
-                        y = ny;
-                        break;
+                int nidx = ny * maze_width + nx;
+                if (maze[ny][nx] == 1 && !closed[nidx]) {
+                    int ng = g[idx] + 1;
+                    if (g[nidx] == -1 || ng < g[nidx]) {
+                        g[nidx] = ng;
+                        parent[nidx] = idx;
+                        if (ng + heuristic(nx, ny) == F) {
+                            bucket_cur[cur_size++] = nidx;   // шаг к выходу: f не изменилось
+                        }
+                        else {
+                            bucket_next[next_size++] = nidx; // шаг от выхода: f = F + 2
+                        }
                     }
                 }
             }
         }
     }
 
-    for (int i = 0; i < maze_height; i++) {
-        free(dist[i]);
+    if (closed[goal]) {
+        last_path_len = g[goal];
+        for (int idx = goal; idx != -1; idx = parent[idx]) {
+            path[idx / maze_width][idx % maze_width] = 1;
+        }
     }
-    free(dist);
+
+    free(g);
+    free(parent);
+    free(closed);
+    free(bucket_cur);
+    free(bucket_next);
 }
 
-// рисует поздравление при победе
+// Запускает поиск многократно (не меньше 200 мс) и возвращает среднее время
+double benchmark_search(void (*search)(void), int* runs_out) {
+    int runs = 0;
+    double t0 = now_ms();
+    double t;
+    do {
+        search();
+        runs++;
+        t = now_ms();
+    } while (t - t0 < 200.0 || runs < 5);
+    *runs_out = runs;
+    return (t - t0) / runs;
+}
+
+// Рисует сообщение о победе (текст + чёрный полупрозрачный фон)
 void draw_win_message() {
     int window_width, window_height;
     glfwGetWindowSize(window, &window_width, &window_height);
 
     // Полупрозрачный чёрный фон
     float panel_w = 380.0f;
-    float panel_h = 100.0f;
+    float panel_h = 80.0f;
     float panel_x = (window_width - panel_w) / 2.0f;
     float panel_y = (window_height - panel_h) / 2.0f;
 
@@ -234,8 +247,8 @@ void draw_win_message() {
     // Текст "CONGRATULATIONS!"
     glColor3f(1.0f, 0.84f, 0.0f);
     glLineWidth(2.5f);
-    float x = panel_x + 30;  // теперь отталкиваемся от панели, чтобы текст был внутри
-    float y = panel_y + 45;  // немного подняли, чтобы уместиться в 100 пикселей высоты
+    float x = panel_x + 30;
+    float y = panel_y + 50;
 
     // C
     glBegin(GL_LINE_STRIP);
@@ -362,7 +375,7 @@ void draw_win_message() {
     glEnd();
 }
 
-// отрисовывает лабиринт, игрока, выход и путь
+// Отрисовывает лабиринт, игрока, выход и путь (если включён)
 void display() {
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -472,18 +485,20 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
             break;
         case GLFW_KEY_SPACE: {
             show_path = 1;
-            find_shortest_path();
+            double t0 = now_ms();
+            find_shortest_path_astar();
             double t1 = now_ms();
-            printf("BFS: %.4f ms, visited %d cells, path %d steps\n",
+            printf("A*: %.4f ms, visited %d cells, path %d steps\n",
                 t1 - t0, last_visited, last_path_len);
             break;
         }
         case GLFW_KEY_T: {
-            // Замер среднего времени поиска BFS
+            // Замер среднего времени поиска A*
             int runs;
-            double avg = benchmark_search(find_shortest_path, &runs);
-            printf("[benchmark] maze %dx%d, seed %u\n", maze_width, maze_height, maze_seed);
-            printf("  BFS: avg %.4f ms over %d runs, visited %d cells, path %d steps\n",
+            double avg = benchmark_search(find_shortest_path_astar, &runs);
+            printf("[benchmark] maze %dx%d, seed %u, player (%d,%d)\n",
+                maze_width, maze_height, maze_seed, player_x, player_y);
+            printf("  A*: avg %.4f ms over %d runs, visited %d cells, path %d steps\n",
                 avg, runs, last_visited, last_path_len);
             break;
         }
