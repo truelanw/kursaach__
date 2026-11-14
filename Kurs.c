@@ -14,38 +14,42 @@
 
 int maze_width = 20;
 int maze_height = 15;
-int** maze;
+
+// [О1] лабиринт одним массивом, клетка = y*W + x
+unsigned char* maze = NULL;
+
 int player_x, player_y;
 int exit_x, exit_y;
-int** path;
 int show_path = 0;
 int has_won = 0;
-// Зерно генератора текущего лабиринта (выводится в консоль)
+// зерно генератора
 unsigned int maze_seed = 0;
 GLFWwindow* window;
 
-// Статистика последнего поиска пути (для замеров)
-int last_visited = 0;   // сколько клеток алгоритм извлёк из очереди
-int last_path_len = -1; // длина найденного пути в шагах (-1 - пути нет)
+// для замеров
+int last_visited = 0;  // раскрыто клеток
+int last_path_len = -1;  // длина пути, -1 если нет
+
+int** path = NULL;
 
 int dx[] = { 0, 1, 0, -1 };
 int dy[] = { -1, 0, 1, 0 };
 
-// Возвращает текущее время в миллисекундах
+// время в мс
 double now_ms() {
     struct timespec ts;
     timespec_get(&ts, TIME_UTC);
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
 }
 
-// Проверяет количество непосещённых соседей у клетки (для генерации)
+// подсчёт соседей
 int check_neighbors(int x, int y) {
     int count = 0;
     for (int i = 0; i < 4; i++) {
         int nx = x + dx[i] * 2;
         int ny = y + dy[i] * 2;
         if (nx > 0 && nx < maze_width - 1 && ny > 0 && ny < maze_height - 1) {
-            if (maze[ny][nx] == 0) {
+            if (maze[ny * maze_width + nx] == 0) {
                 count++;
             }
         }
@@ -53,9 +57,9 @@ int check_neighbors(int x, int y) {
     return count;
 }
 
-// Рекурсивная генерация лабиринта методом бэктрекинга (Randomized DFS)
+// ===== генерация =====
 void generate_maze_recursive(int x, int y) {
-    maze[y][x] = 1;
+    maze[y * maze_width + x] = 1;
 
     int dirs[4] = { 0, 1, 2, 3 };
     for (int i = 3; i > 0; i--) {
@@ -71,25 +75,32 @@ void generate_maze_recursive(int x, int y) {
         int ny = y + dy[dir] * 2;
 
         if (nx > 0 && nx < maze_width - 1 && ny > 0 && ny < maze_height - 1) {
-            if (maze[ny][nx] == 0) {
-                maze[y + dy[dir]][x + dx[dir]] = 1;
+            if (maze[ny * maze_width + nx] == 0) {
+                maze[(y + dy[dir]) * maze_width + (x + dx[dir])] = 1;
                 generate_maze_recursive(nx, ny);
             }
         }
     }
 }
 
-// Создаёт новый лабиринт, задаёт вход и выход
-void generate_maze() {
-    maze = (int**)malloc(maze_height * sizeof(int*));
-    for (int i = 0; i < maze_height; i++) {
-        maze[i] = (int*)malloc(maze_width * sizeof(int));
-        for (int j = 0; j < maze_width; j++) {
-            maze[i][j] = 0;
+void free_maze() {
+    free(maze);
+    maze = NULL;
+    if (path != NULL) {
+        for (int i = 0; i < maze_height; i++) {
+            free(path[i]);
         }
+        free(path);
+        path = NULL;
     }
+}
 
-    // Случайное зерно: время + счётчик тактов
+// новый лабиринт
+void generate_maze() {
+    const int n = maze_width * maze_height;
+    maze = (unsigned char*)calloc(n, 1);
+
+    // новое зерно каждый раз
     maze_seed = (unsigned int)time(NULL) ^ ((unsigned int)clock() * 2654435761u) ^ (maze_seed * 31u + 1u);
     srand(maze_seed);
     printf("Maze %dx%d, seed %u\n", maze_width, maze_height, maze_seed);
@@ -106,18 +117,12 @@ void generate_maze() {
     player_y = 1;
     exit_x = maze_width - 2;
     exit_y = maze_height - 2;
-    maze[player_y][player_x] = 1;
-    maze[exit_y][exit_x] = 1;
+    maze[player_y * maze_width + player_x] = 1;
+    maze[exit_y * maze_width + exit_x] = 1;
     has_won = 0;
 }
 
-// Эвристика для A*: манхэттенское расстояние до выхода
-static int heuristic(int x, int y) {
-    return abs(x - exit_x) + abs(y - exit_y);
-}
-
-// Находит кратчайший путь от игрока до выхода алгоритмом A*
-// (две корзины вместо очереди с приоритетом)
+// ===== A* =====
 void find_shortest_path_astar() {
     if (path != NULL) {
         for (int i = 0; i < maze_height; i++) {
@@ -131,67 +136,63 @@ void find_shortest_path_astar() {
         path[i] = (int*)calloc(maze_width, sizeof(int));
     }
 
-    int n = maze_width * maze_height;
-    int* g = (int*)malloc(n * sizeof(int));                 // лучшая известная длина пути до клетки
-    int* parent = (int*)malloc(n * sizeof(int));            // откуда пришли в клетку
-    unsigned char* closed = (unsigned char*)calloc(n, 1);   // клетка уже раскрыта
-    // Корзины клеток с f == F и f == F + 2
-    int* bucket_cur = (int*)malloc((4 * n + 1) * sizeof(int));  // клетки с f == F
-    int* bucket_next = (int*)malloc((4 * n + 1) * sizeof(int)); // клетки с f == F + 2
+    const int W = maze_width;
+    const int n = W * maze_height;
+    // [О1] соседи: вверх, вправо, вниз, влево
+    const int off[4] = { -W, 1, W, -1 };
+    const unsigned char* M = maze;
+    int* g = (int*)malloc(n * sizeof(int));  // расстояние от игрока
+    int* parent = (int*)malloc(n * sizeof(int));  // откуда пришли
+    unsigned char* closed = (unsigned char*)calloc(n, 1);  // раскрыта
+    // корзины f и f+2
+    int* cur = (int*)malloc((4 * n + 1) * sizeof(int));
+    int* next = (int*)malloc((4 * n + 1) * sizeof(int));
     int cur_size = 0, next_size = 0;
 
     for (int i = 0; i < n; i++) g[i] = -1;
 
-    int start = player_y * maze_width + player_x;
-    int goal = exit_y * maze_width + exit_x;
+    const int start = player_y * W + player_x;
+    const int goal = exit_y * W + exit_x;
 
     last_visited = 0;
     last_path_len = -1;
 
-    int F = heuristic(player_x, player_y); // текущее значение f
     g[start] = 0;
     parent[start] = -1;
-    bucket_cur[cur_size++] = start;
+    cur[cur_size++] = start;
 
-    while (cur_size > 0 || next_size > 0) {
+    for (;;) {
         if (cur_size == 0) {
-            // Корзина пуста - переходим к следующему уровню f
-            int* tmp = bucket_cur;
-            bucket_cur = bucket_next;
-            bucket_next = tmp;
+            if (next_size == 0) break;  // пути нет
+            // корзина пуста, берём следующую
+            int* tmp = cur;
+            cur = next;
+            next = tmp;
             cur_size = next_size;
             next_size = 0;
-            F += 2;
         }
 
-        int idx = bucket_cur[--cur_size];
-        if (closed[idx]) continue; // клетка уже раскрыта
+        const int idx = cur[--cur_size];
+        if (closed[idx]) continue;  // старая запись
         closed[idx] = 1;
         last_visited++;
 
-        if (idx == goal) break;    // выход найден - дальше не ищем
+        if (idx == goal) break;  // дошли
 
-        int x = idx % maze_width;
-        int y = idx / maze_width;
-
+        // [О1] один раз на все 4 соседа
+        const int ng = g[idx] + 1;
         for (int i = 0; i < 4; i++) {
-            int nx = x + dx[i];
-            int ny = y + dy[i];
-
-            if (nx >= 0 && nx < maze_width && ny >= 0 && ny < maze_height) {
-                int nidx = ny * maze_width + nx;
-                if (maze[ny][nx] == 1 && !closed[nidx]) {
-                    int ng = g[idx] + 1;
-                    if (g[nidx] == -1 || ng < g[nidx]) {
-                        g[nidx] = ng;
-                        parent[nidx] = idx;
-                        if (ng + heuristic(nx, ny) == F) {
-                            bucket_cur[cur_size++] = nidx;   // шаг к выходу: f не изменилось
-                        }
-                        else {
-                            bucket_next[next_size++] = nidx; // шаг от выхода: f = F + 2
-                        }
-                    }
+            // [О1] границы не проверяем, по краям стены
+            const int nidx = idx + off[i];
+            if (!M[nidx] || closed[nidx]) continue;
+            if (g[nidx] == -1 || ng < g[nidx]) {
+                g[nidx] = ng;
+                parent[nidx] = idx;
+                if (i == 1 || i == 2) {
+                    cur[cur_size++] = nidx;  // вправо/вниз
+                }
+                else {
+                    next[next_size++] = nidx;  // вверх/влево
                 }
             }
         }
@@ -200,18 +201,18 @@ void find_shortest_path_astar() {
     if (closed[goal]) {
         last_path_len = g[goal];
         for (int idx = goal; idx != -1; idx = parent[idx]) {
-            path[idx / maze_width][idx % maze_width] = 1;
+            path[idx / W][idx % W] = 1;
         }
     }
 
     free(g);
     free(parent);
     free(closed);
-    free(bucket_cur);
-    free(bucket_next);
+    free(cur);
+    free(next);
 }
 
-// Запускает поиск многократно (не меньше 200 мс) и возвращает среднее время
+// замер: гоняем поиск >= 200 мс, возвращаем среднее
 double benchmark_search(void (*search)(void), int* runs_out) {
     int runs = 0;
     double t0 = now_ms();
@@ -225,14 +226,13 @@ double benchmark_search(void (*search)(void), int* runs_out) {
     return (t - t0) / runs;
 }
 
-// Рисует сообщение о победе (текст + чёрный полупрозрачный фон)
+// сообщение о победе
 void draw_win_message() {
     int window_width, window_height;
     glfwGetWindowSize(window, &window_width, &window_height);
 
-    // Полупрозрачный чёрный фон
     float panel_w = 380.0f;
-    float panel_h = 100.0f;
+    float panel_h = 80.0f;
     float panel_x = (window_width - panel_w) / 2.0f;
     float panel_y = (window_height - panel_h) / 2.0f;
 
@@ -247,11 +247,10 @@ void draw_win_message() {
     glEnd();
     glDisable(GL_BLEND);
 
-    // Текст "CONGRATULATIONS!"
     glColor3f(1.0f, 0.84f, 0.0f);
     glLineWidth(2.5f);
-    float x = panel_x + 30;  // теперь отталкиваемся от панели, чтобы текст был внутри
-    float y = panel_y + 45;  // немного подняли, чтобы уместиться в 100 пикселей высоты
+    float x = panel_x + 30;
+    float y = panel_y + 50;
 
     // C
     glBegin(GL_LINE_STRIP);
@@ -378,13 +377,13 @@ void draw_win_message() {
     glEnd();
 }
 
-// Отрисовывает лабиринт, игрока, выход и путь (если включён)
+// отрисовка
 void display() {
     glClear(GL_COLOR_BUFFER_BIT);
 
     for (int y = 0; y < maze_height; y++) {
         for (int x = 0; x < maze_width; x++) {
-            if (maze[y][x] == 0) {
+            if (maze[y * maze_width + x] == 0) {
                 glColor3f(0.3f, 0.3f, 0.3f);
             }
             else {
@@ -404,7 +403,7 @@ void display() {
         glColor3f(1.0f, 0.0f, 0.0f);
         for (int y = 0; y < maze_height; y++) {
             for (int x = 0; x < maze_width; x++) {
-                if (path[y][x] == 1 && maze[y][x] == 1) {
+                if (path[y][x] == 1 && maze[y * maze_width + x] == 1) {
                     glBegin(GL_QUADS);
                     glVertex2f(x * CELL_SIZE + 4, y * CELL_SIZE + 4);
                     glVertex2f((x + 1) * CELL_SIZE - 4, y * CELL_SIZE + 4);
@@ -439,22 +438,12 @@ void display() {
     glfwSwapBuffers(window);
 }
 
-// Обрабатывает нажатия клавиш
+// клавиши
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (action == GLFW_PRESS) {
         if (key == GLFW_KEY_N) {
-            for (int i = 0; i < maze_height; i++) {
-                free(maze[i]);
-            }
-            free(maze);
+            free_maze();
             generate_maze();
-            if (path != NULL) {
-                for (int i = 0; i < maze_height; i++) {
-                    free(path[i]);
-                }
-                free(path);
-                path = NULL;
-            }
             show_path = 0;
             return;
         }
@@ -465,26 +454,21 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 
         if (has_won) return;
 
+        // [О1] границы не проверяем, по краям стены
+        const int W = maze_width;
+        const int p = player_y * W + player_x;
         switch (key) {
         case GLFW_KEY_W:
-            if (player_y > 0 && maze[player_y - 1][player_x] == 1) {
-                player_y--;
-            }
+            if (maze[p - W]) player_y--;
             break;
         case GLFW_KEY_S:
-            if (player_y < maze_height - 1 && maze[player_y + 1][player_x] == 1) {
-                player_y++;
-            }
+            if (maze[p + W]) player_y++;
             break;
         case GLFW_KEY_A:
-            if (player_x > 0 && maze[player_y][player_x - 1] == 1) {
-                player_x--;
-            }
+            if (maze[p - 1]) player_x--;
             break;
         case GLFW_KEY_D:
-            if (player_x < maze_width - 1 && maze[player_y][player_x + 1] == 1) {
-                player_x++;
-            }
+            if (maze[p + 1]) player_x++;
             break;
         case GLFW_KEY_SPACE: {
             show_path = 1;
@@ -496,7 +480,7 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
             break;
         }
         case GLFW_KEY_T: {
-            // Замер среднего времени поиска A*
+            // замер A*
             int runs;
             double avg = benchmark_search(find_shortest_path_astar, &runs);
             printf("[benchmark] maze %dx%d, seed %u, player (%d,%d)\n",
@@ -519,7 +503,7 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     }
 }
 
-// Настраивает область просмотра и проекцию при изменении размера окна
+// изменение размера окна
 void resizeCallback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
     glMatrixMode(GL_PROJECTION);
@@ -585,17 +569,7 @@ int main(int argc, char** argv) {
         glfwPollEvents();
     }
 
-    for (int i = 0; i < maze_height; i++) {
-        free(maze[i]);
-    }
-    free(maze);
-
-    if (path != NULL) {
-        for (int i = 0; i < maze_height; i++) {
-            free(path[i]);
-        }
-        free(path);
-    }
+    free_maze();
 
     glfwDestroyWindow(window);
     glfwTerminate();
