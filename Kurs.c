@@ -58,29 +58,50 @@ int check_neighbors(int x, int y) {
 }
 
 // ===== генерация =====
-void generate_maze_recursive(int x, int y) {
-    maze[y * maze_width + x] = 1;
+typedef struct {
+    int x, y;
+    unsigned char dirs[4];
+    int next;
+} GenFrame;
 
-    int dirs[4] = { 0, 1, 2, 3 };
+static void gen_enter(GenFrame* f, int x, int y) {
+    maze[y * maze_width + x] = 1;
+    f->x = x;
+    f->y = y;
+    f->next = 0;
+    unsigned char d[4] = { 0, 1, 2, 3 };
     for (int i = 3; i > 0; i--) {
         int j = rand() % (i + 1);
-        int temp = dirs[i];
-        dirs[i] = dirs[j];
-        dirs[j] = temp;
+        unsigned char t = d[i];
+        d[i] = d[j];
+        d[j] = t;
     }
+    memcpy(f->dirs, d, 4);
+}
 
-    for (int i = 0; i < 4; i++) {
-        int dir = dirs[i];
-        int nx = x + dx[dir] * 2;
-        int ny = y + dy[dir] * 2;
+static void generate_maze_iterative(int start_x, int start_y) {
+    const int W = maze_width, H = maze_height;
+    // глубже числа узловых клеток не уйдём
+    int cap = ((W - 1) / 2) * ((H - 1) / 2) + 1;
+    GenFrame* stack = (GenFrame*)malloc(cap * sizeof(GenFrame));
+    int top = 0;
 
-        if (nx > 0 && nx < maze_width - 1 && ny > 0 && ny < maze_height - 1) {
-            if (maze[ny * maze_width + nx] == 0) {
-                maze[(y + dy[dir]) * maze_width + (x + dx[dir])] = 1;
-                generate_maze_recursive(nx, ny);
-            }
+    gen_enter(&stack[top++], start_x, start_y);
+    while (top > 0) {
+        GenFrame* f = &stack[top - 1];
+        if (f->next == 4) {  // назад
+            top--;
+            continue;
+        }
+        int dir = f->dirs[f->next++];
+        int nx = f->x + dx[dir] * 2;
+        int ny = f->y + dy[dir] * 2;
+        if (nx > 0 && nx < W - 1 && ny > 0 && ny < H - 1 && maze[ny * W + nx] == 0) {
+            maze[(f->y + dy[dir]) * W + (f->x + dx[dir])] = 1;  // ломаем стену
+            gen_enter(&stack[top++], nx, ny);  // дальше
         }
     }
+    free(stack);
 }
 
 void free_maze() {
@@ -111,7 +132,7 @@ void generate_maze() {
         start_y = 1 + 2 * (rand() % ((maze_height - 1) / 2));
     }
 
-    generate_maze_recursive(start_x, start_y);
+    generate_maze_iterative(start_x, start_y);
 
     player_x = 1;
     player_y = 1;
@@ -454,7 +475,7 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 
         if (has_won) return;
 
-        // [О1] границы не проверяем, по краям стены
+        // границы не проверяем, по краям стены
         const int W = maze_width;
         const int p = player_y * W + player_x;
         switch (key) {
