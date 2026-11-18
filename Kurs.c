@@ -26,6 +26,11 @@ int has_won = 0;
 unsigned int maze_seed = 0;
 GLFWwindow* window;
 
+// размер окна
+int win_w = WINDOW_WIDTH, win_h = WINDOW_HEIGHT;
+// [О4] нужна ли перерисовка
+int need_redraw = 1;
+
 // для замеров
 int last_visited = 0;  // раскрыто клеток
 int last_path_len = -1;  // длина пути, -1 если нет
@@ -53,20 +58,6 @@ double now_ms() {
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
 }
 
-// подсчёт соседей
-int check_neighbors(int x, int y) {
-    int count = 0;
-    for (int i = 0; i < 4; i++) {
-        int nx = x + dx[i] * 2;
-        int ny = y + dy[i] * 2;
-        if (nx > 0 && nx < maze_width - 1 && ny > 0 && ny < maze_height - 1) {
-            if (maze[ny * maze_width + nx] == 0) {
-                count++;
-            }
-        }
-    }
-    return count;
-}
 
 // ===== генерация =====
 typedef struct {
@@ -161,9 +152,8 @@ void generate_maze() {
     player_y = 1;
     exit_x = maze_width - 2;
     exit_y = maze_height - 2;
-    maze[player_y * maze_width + player_x] = 1;
-    maze[exit_y * maze_width + exit_x] = 1;
     has_won = 0;
+    need_redraw = 1;
 }
 
 // ===== A* =====
@@ -260,24 +250,26 @@ double benchmark_search(void (*search)(void), int* runs_out) {
     return (t - t0) / runs;
 }
 
+// [О4] квадрат
+static inline void quad(float x0, float y0, float x1, float y1) {
+    glVertex2f(x0, y0);
+    glVertex2f(x1, y0);
+    glVertex2f(x1, y1);
+    glVertex2f(x0, y1);
+}
+
 // сообщение о победе
 void draw_win_message() {
-    int window_width, window_height;
-    glfwGetWindowSize(window, &window_width, &window_height);
-
     float panel_w = 380.0f;
     float panel_h = 80.0f;
-    float panel_x = (window_width - panel_w) / 2.0f;
-    float panel_y = (window_height - panel_h) / 2.0f;
+    float panel_x = (win_w - panel_w) / 2.0f;
+    float panel_y = (win_h - panel_h) / 2.0f;
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColor4f(0.0f, 0.0f, 0.0f, 0.85f);
     glBegin(GL_QUADS);
-    glVertex2f(panel_x, panel_y);
-    glVertex2f(panel_x + panel_w, panel_y);
-    glVertex2f(panel_x + panel_w, panel_y + panel_h);
-    glVertex2f(panel_x, panel_y + panel_h);
+    quad(panel_x, panel_y, panel_x + panel_w, panel_y + panel_h);
     glEnd();
     glDisable(GL_BLEND);
 
@@ -415,21 +407,30 @@ void draw_win_message() {
 void display() {
     glClear(GL_COLOR_BUFFER_BIT);
 
-    for (int y = 0; y < maze_height; y++) {
-        for (int x = 0; x < maze_width; x++) {
-            if (maze[y * maze_width + x] == 0) {
-                glColor3f(0.3f, 0.3f, 0.3f);
-            }
-            else {
-                glColor3f(1.0f, 1.0f, 1.0f);
-            }
+    const int W = maze_width;
+    // [О4] только видимые клетки
+    int vis_w = (win_w + CELL_SIZE - 1) / CELL_SIZE;
+    int vis_h = (win_h + CELL_SIZE - 1) / CELL_SIZE;
+    if (vis_w > maze_width) vis_w = maze_width;
+    if (vis_h > maze_height) vis_h = maze_height;
 
-            glBegin(GL_QUADS);
-            glVertex2f(x * CELL_SIZE, y * CELL_SIZE);
-            glVertex2f((x + 1) * CELL_SIZE, y * CELL_SIZE);
-            glVertex2f((x + 1) * CELL_SIZE, (y + 1) * CELL_SIZE);
-            glVertex2f(x * CELL_SIZE, (y + 1) * CELL_SIZE);
-            glEnd();
+    // [О4] один glBegin на весь кадр
+    glBegin(GL_QUADS);
+
+    // фон белым, сверху стены
+    glColor3f(1.0f, 1.0f, 1.0f);
+    quad(0.0f, 0.0f, (float)(vis_w * CELL_SIZE), (float)(vis_h * CELL_SIZE));
+
+    glColor3f(0.3f, 0.3f, 0.3f);
+    for (int y = 0; y < vis_h; y++) {
+        const unsigned char* row = maze + y * W;  // [О4] строка
+        const float y0 = (float)(y * CELL_SIZE);
+        const float y1 = y0 + CELL_SIZE;
+        float x0 = 0.0f;  // [О4] без умножения
+        for (int x = 0; x < vis_w; x++, x0 += CELL_SIZE) {
+            if (!row[x]) {
+                quad(x0, y0, x0 + CELL_SIZE, y1);
+            }
         }
     }
 
@@ -437,31 +438,27 @@ void display() {
     if (show_path && path_len > 0) {
         glColor3f(1.0f, 0.0f, 0.0f);
         for (int k = 0; k < path_len; k++) {
-            int x = path_cells[k] % maze_width;
-            int y = path_cells[k] / maze_width;
-            glBegin(GL_QUADS);
-            glVertex2f(x * CELL_SIZE + 4, y * CELL_SIZE + 4);
-            glVertex2f((x + 1) * CELL_SIZE - 4, y * CELL_SIZE + 4);
-            glVertex2f((x + 1) * CELL_SIZE - 4, (y + 1) * CELL_SIZE - 4);
-            glVertex2f(x * CELL_SIZE + 4, (y + 1) * CELL_SIZE - 4);
-            glEnd();
+            int x = path_cells[k] % W;
+            int y = path_cells[k] / W;
+            if (x < vis_w && y < vis_h) {
+                float x0 = (float)(x * CELL_SIZE), y0 = (float)(y * CELL_SIZE);
+                quad(x0 + 4, y0 + 4, x0 + CELL_SIZE - 4, y0 + CELL_SIZE - 4);
+            }
         }
     }
 
     glColor3f(0.0f, 0.0f, 1.0f);
-    glBegin(GL_QUADS);
-    glVertex2f(player_x * CELL_SIZE + 2, player_y * CELL_SIZE + 2);
-    glVertex2f((player_x + 1) * CELL_SIZE - 2, player_y * CELL_SIZE + 2);
-    glVertex2f((player_x + 1) * CELL_SIZE - 2, (player_y + 1) * CELL_SIZE - 2);
-    glVertex2f(player_x * CELL_SIZE + 2, (player_y + 1) * CELL_SIZE - 2);
-    glEnd();
+    {
+        float x0 = (float)(player_x * CELL_SIZE), y0 = (float)(player_y * CELL_SIZE);
+        quad(x0 + 2, y0 + 2, x0 + CELL_SIZE - 2, y0 + CELL_SIZE - 2);
+    }
 
     glColor3f(0.0f, 1.0f, 0.0f);
-    glBegin(GL_QUADS);
-    glVertex2f(exit_x * CELL_SIZE + 4, exit_y * CELL_SIZE + 4);
-    glVertex2f((exit_x + 1) * CELL_SIZE - 4, exit_y * CELL_SIZE + 4);
-    glVertex2f((exit_x + 1) * CELL_SIZE - 4, (exit_y + 1) * CELL_SIZE - 4);
-    glVertex2f(exit_x * CELL_SIZE + 4, (exit_y + 1) * CELL_SIZE - 4);
+    {
+        float x0 = (float)(exit_x * CELL_SIZE), y0 = (float)(exit_y * CELL_SIZE);
+        quad(x0 + 4, y0 + 4, x0 + CELL_SIZE - 4, y0 + CELL_SIZE - 4);
+    }
+
     glEnd();
 
     if (has_won) {
@@ -474,6 +471,7 @@ void display() {
 // клавиши
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (action == GLFW_PRESS) {
+        need_redraw = 1;
         if (key == GLFW_KEY_N) {
             free_maze();
             generate_maze();
@@ -532,18 +530,28 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     else if (action == GLFW_RELEASE) {
         if (key == GLFW_KEY_SPACE) {
             show_path = 0;
+            need_redraw = 1;
         }
     }
 }
 
 // изменение размера окна
 void resizeCallback(GLFWwindow* window, int width, int height) {
+    win_w = width;
+    win_h = height;
     glViewport(0, 0, width, height);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     glOrtho(0, width, height, 0, -1, 1);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
+    need_redraw = 1;
+}
+
+// перерисовка окна
+void refreshCallback(GLFWwindow* window) {
+    display();
+    need_redraw = 0;
 }
 
 int main(int argc, char** argv) {
@@ -572,6 +580,7 @@ int main(int argc, char** argv) {
 
     glfwSetKeyCallback(window, keyCallback);
     glfwSetWindowSizeCallback(window, resizeCallback);
+    glfwSetWindowRefreshCallback(window, refreshCallback);
 
     GLenum err = glewInit();
     if (err != GLEW_OK) {
@@ -596,10 +605,13 @@ int main(int argc, char** argv) {
     printf("N - new maze (same size)\n");
     printf("Q or ESC - quit\n");
 
+    // [О4] рисуем только когда что-то поменялось
     while (!glfwWindowShouldClose(window)) {
-        glClear(GL_COLOR_BUFFER_BIT);
-        display();
-        glfwPollEvents();
+        if (need_redraw) {
+            display();
+            need_redraw = 0;
+        }
+        glfwWaitEvents();
     }
 
     free_maze();
